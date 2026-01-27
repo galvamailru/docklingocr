@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Docling OCR2 UI</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 24px;
+        color: #1f2933;
+      }
+      h1 {
+        margin-bottom: 8px;
+      }
+      .card {
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        padding: 16px;
+        max-width: 820px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      button {
+        padding: 10px 16px;
+        background: #2563eb;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .progress {
+        height: 10px;
+        background: #e5e7eb;
+        border-radius: 6px;
+        overflow: hidden;
+        margin-top: 12px;
+      }
+      .progress-bar {
+        height: 100%;
+        width: 0%;
+        background: #22c55e;
+        transition: width 0.2s ease;
+      }
+      .error {
+        color: #b91c1c;
+        margin-top: 8px;
+      }
+      pre {
+        white-space: pre-wrap;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        padding: 12px;
+        border-radius: 6px;
+        max-height: 360px;
+        overflow: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      th,
+      td {
+        border: 1px solid #e2e8f0;
+        padding: 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #f1f5f9;
+      }
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #eef2ff;
+        color: #4338ca;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .muted {
+        color: #6b7280;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Docling OCR2</h1>
+    <p class="muted">Загрузите PDF, нажмите «Обработать» и посмотрите распознанный текст и объекты (таблицы, изображения, текстовые блоки).</p>
+
+    <div class="card">
+      <div class="row">
+        <input type="file" id="fileInput" accept="application/pdf" />
+        <button id="processBtn">Обработать</button>
+      </div>
+      <div class="progress" aria-label="progress">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+      <div class="error" id="error"></div>
+    </div>
+
+    <div id="results" style="margin-top: 20px; display: none;">
+      <h3>Распознанный текст</h3>
+      <pre id="textOutput"></pre>
+
+      <h3>Объекты на документе</h3>
+      <table id="objectsTable">
+        <thead>
+          <tr>
+            <th>Тип</th>
+            <th>Страница</th>
+            <th>BBox</th>
+            <th>Текст (фрагмент)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <script>
+      const btn = document.getElementById("processBtn");
+      const fileInput = document.getElementById("fileInput");
+      const progressBar = document.getElementById("progressBar");
+      const errorBox = document.getElementById("error");
+      const results = document.getElementById("results");
+      const textOutput = document.getElementById("textOutput");
+      const objectsTableBody = document.querySelector("#objectsTable tbody");
+
+      let fakeProgressTimer;
+
+      function resetUI() {
+        errorBox.textContent = "";
+        progressBar.style.width = "0%";
+        clearInterval(fakeProgressTimer);
+        fakeProgressTimer = null;
+      }
+
+      function startFakeProgress() {
+        let progress = 5;
+        progressBar.style.width = `${progress}%`;
+        fakeProgressTimer = setInterval(() => {
+          progress = Math.min(progress + Math.random() * 15, 92);
+          progressBar.style.width = `${progress}%`;
+        }, 400);
+      }
+
+      function finishProgress() {
+        clearInterval(fakeProgressTimer);
+        progressBar.style.width = "100%";
+      }
+
+      btn.addEventListener("click", async () => {
+        resetUI();
+        results.style.display = "none";
+
+        const file = fileInput.files[0];
+        if (!file) {
+          errorBox.textContent = "Выберите PDF файл.";
+          return;
+        }
+
+        btn.disabled = true;
+        startFakeProgress();
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+          const response = await fetch("/parse", { method: "POST", body: formData });
+          const data = await response.json().catch(() => ({}));
+          finishProgress();
+
+          if (!response.ok) throw new Error(data.error || "Ошибка обработки");
+
+          results.style.display = "block";
+          textOutput.textContent = data.text || "";
+
+          objectsTableBody.innerHTML = "";
+          (data.objects || []).forEach((obj) => {
+            const row = document.createElement("tr");
+            const typeCell = document.createElement("td");
+            const pageCell = document.createElement("td");
+            const bboxCell = document.createElement("td");
+            const textCell = document.createElement("td");
+
+            typeCell.innerHTML = `<span class="pill">${obj.type || "N/A"}</span>`;
+            pageCell.textContent = (obj.page ?? "—").toString();
+            bboxCell.textContent = obj.bbox ? JSON.stringify(obj.bbox) : "—";
+            textCell.textContent = (obj.text || "").slice(0, 200);
+
+            row.appendChild(typeCell);
+            row.appendChild(pageCell);
+            row.appendChild(bboxCell);
+            row.appendChild(textCell);
+            objectsTableBody.appendChild(row);
+          });
+        } catch (err) {
+          finishProgress();
+          errorBox.textContent = err?.message || String(err);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
+
