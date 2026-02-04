@@ -2,7 +2,9 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from docling.document_converter import DocumentConverter
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TesseractCliOcrOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.types.doc import PictureItem, TableItem
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
@@ -124,8 +126,15 @@ def _extract_objects(doc: Any) -> List[Dict[str, Any]]:
 def convert_pdf(pdf_path: Path) -> Dict[str, Any]:
     """
     Convert a PDF to text and structured objects using Docling.
+    OCR language is set to auto so Tesseract detects script/language automatically.
     """
-    converter = DocumentConverter()
+    ocr_options = TesseractCliOcrOptions(lang=["auto"])
+    pipeline_options = PdfPipelineOptions(do_ocr=True, ocr_options=ocr_options)
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+        }
+    )
     result = converter.convert(pdf_path)
     doc = result.document
     text = doc.export_to_text()
