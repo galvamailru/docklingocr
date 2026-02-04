@@ -21,47 +21,70 @@ app.mount(
 
 
 def _bbox_to_list(bbox: Any) -> Optional[List[float]]:
-    """Safely normalize bbox to list if present."""
+    """Safely normalize bbox to list [left, top, right, bottom] or [x0, y0, x1, y1]."""
     if bbox is None:
         return None
-    if isinstance(bbox, (list, tuple)):
-        return [float(x) for x in bbox]
-    # Try common attribute names used by Docling's BoundingBox
-    # 1) x0, y0, x1, y1
-    coords_xy: List[float] = []
-    for attr in ("x0", "y0", "x1", "y1"):
-        if hasattr(bbox, attr):
-            coords_xy.append(float(getattr(bbox, attr)))
-    if coords_xy:
-        return coords_xy
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        return [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])]
+    if isinstance(bbox, dict):
+        for keys in (("left", "top", "right", "bottom"), ("l", "t", "r", "b"), ("x0", "y0", "x1", "y1")):
+            if all(k in bbox for k in keys):
+                try:
+                    return [float(bbox[k]) for k in keys]
+                except (TypeError, ValueError):
+                    pass
 
-    # 2) left, top, right, bottom
-    coords_ltrb: List[float] = []
-    for attr in ("left", "top", "right", "bottom"):
-        if hasattr(bbox, attr):
-            coords_ltrb.append(float(getattr(bbox, attr)))
-    if coords_ltrb:
-        return coords_ltrb
+    # Try attribute names used by Docling / docling_core BoundingBox
+    for attrs in (
+        ("left", "top", "right", "bottom"),
+        ("l", "t", "r", "b"),
+        ("x0", "y0", "x1", "y1"),
+    ):
+        coords: List[float] = []
+        for attr in attrs:
+            if hasattr(bbox, attr):
+                try:
+                    coords.append(float(getattr(bbox, attr)))
+                except (TypeError, ValueError):
+                    break
+        if len(coords) == 4:
+            return coords
 
+    # Fallback: any object with 4 numeric fields (e.g. dataclass)
+    if hasattr(bbox, "__iter__") and not isinstance(bbox, (str, bytes)):
+        try:
+            vals = list(bbox)[:4]
+            if len(vals) == 4:
+                return [float(v) for v in vals]
+        except (TypeError, ValueError):
+            pass
     return None
 
 
 def _extract_page_and_bbox(element: Any) -> tuple[Optional[int], Optional[List[float]]]:
     """
-    Docling обычно хранит координаты/страницу в provenance: element.prov[0].bbox, element.prov[0].page_no.
-    Возвращаем (page_no, bbox_list).
+    Docling хранит координаты/страницу в provenance: element.prov[0].bbox, element.prov[0].page_no.
+    Проверяем все prov и варианты имён полей (bbox, bounding_box, box).
     """
     prov = getattr(element, "prov", None)
     if isinstance(prov, list) and prov:
-        first = prov[0]
-        page_no = getattr(first, "page_no", None)
-        bbox = getattr(first, "bbox", None)
-        bbox_list = _bbox_to_list(bbox)
-        if bbox_list is not None or page_no is not None:
-            return (int(page_no) if page_no is not None else None, bbox_list)
+        for p in prov:
+            page_no = getattr(p, "page_no", None) or getattr(p, "page", None)
+            bbox = (
+                getattr(p, "bbox", None)
+                or getattr(p, "bounding_box", None)
+                or getattr(p, "box", None)
+            )
+            bbox_list = _bbox_to_list(bbox)
+            if bbox_list is not None or page_no is not None:
+                return (int(page_no) if page_no is not None else None, bbox_list)
 
-    # fallback: element-level bbox (если есть)
-    return (None, _bbox_to_list(getattr(element, "bbox", None)))
+    # fallback: bbox на самом элементе
+    for attr in ("bbox", "bounding_box", "box"):
+        bbox_list = _bbox_to_list(getattr(element, attr, None))
+        if bbox_list is not None:
+            return (None, bbox_list)
+    return (None, None)
 
 
 def _iterate_items(doc: Any) -> Iterable[Tuple[Any, int]]:
@@ -126,9 +149,9 @@ def _extract_objects(doc: Any) -> List[Dict[str, Any]]:
 def convert_pdf(pdf_path: Path) -> Dict[str, Any]:
     """
     Convert a PDF to text and structured objects using Docling.
-    OCR language is set to auto so Tesseract detects script/language automatically.
+    OCR uses Russian + English explicitly for correct Cyrillic recognition.
     """
-    ocr_options = TesseractCliOcrOptions(lang=["auto"])
+    ocr_options = TesseractCliOcrOptions(lang=["rus", "eng"])
     pipeline_options = PdfPipelineOptions(do_ocr=True, ocr_options=ocr_options)
     converter = DocumentConverter(
         format_options={
