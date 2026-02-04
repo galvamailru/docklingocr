@@ -1,3 +1,5 @@
+import base64
+import io
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -97,6 +99,23 @@ def _iterate_items(doc: Any) -> Iterable[Tuple[Any, int]]:
             yield el, 0
 
 
+def _picture_to_base64(element: PictureItem, doc: Any) -> Optional[str]:
+    """Получить изображение PictureItem как PNG в base64 (вырезанный по bbox сегмент)."""
+    get_image = getattr(element, "get_image", None)
+    if not callable(get_image):
+        return None
+    try:
+        # get_image(document) возвращает PIL Image
+        img = get_image(doc)
+        if img is None:
+            return None
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _extract_objects(doc: Any) -> List[Dict[str, Any]]:
     """
     Extract objects from Docling document:
@@ -127,18 +146,37 @@ def _extract_objects(doc: Any) -> List[Dict[str, Any]]:
             kind = getattr(element, "category", None) or "text"
             text = getattr(element, "text", None) or getattr(element, "content", None) or ""
 
-        objects.append({"type": str(kind), "page": page_no, "bbox": bbox, "text": text})
+        # Координаты bbox с точностью до одного знака после запятой
+        bbox_rounded: Optional[List[float]] = None
+        if bbox and len(bbox) >= 4:
+            bbox_rounded = [round(float(x), 1) for x in bbox[:4]]
+
+        obj: Dict[str, Any] = {"type": str(kind), "page": page_no, "bbox": bbox_rounded, "text": text}
+
+        # Для изображений — вырезанный по bbox сегмент в base64
+        if isinstance(element, PictureItem):
+            image_base64 = _picture_to_base64(element, doc)
+            if image_base64:
+                obj["image_base64"] = image_base64
+
+        objects.append(obj)
 
     # Fallback to exported dict if list is still empty
     if not objects and hasattr(doc, "export_to_dict"):
         data = doc.export_to_dict()
         blocks = data.get("blocks") or data.get("elements") or []
         for block in blocks:
+            raw_bbox = block.get("bbox")
+            bbox_rounded = None
+            if raw_bbox is not None:
+                bl = _bbox_to_list(raw_bbox)
+                if bl and len(bl) >= 4:
+                    bbox_rounded = [round(float(x), 1) for x in bl[:4]]
             objects.append(
                 {
                     "type": block.get("category") or block.get("type") or "unknown",
                     "page": block.get("page_no") or block.get("page"),
-                    "bbox": block.get("bbox"),
+                    "bbox": bbox_rounded,
                     "text": block.get("text", ""),
                 }
             )
@@ -152,7 +190,11 @@ def convert_pdf(pdf_path: Path) -> Dict[str, Any]:
     OCR uses Russian + English explicitly for correct Cyrillic recognition.
     """
     ocr_options = TesseractCliOcrOptions(lang=["rus", "eng"])
-    pipeline_options = PdfPipelineOptions(do_ocr=True, ocr_options=ocr_options)
+    pipeline_options = PdfPipelineOptions(
+        do_ocr=True,
+        ocr_options=ocr_options,
+        generate_picture_images=True,  # нужны для вывода сегментов изображений
+    )
     converter = DocumentConverter(
         format_options={
             InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),

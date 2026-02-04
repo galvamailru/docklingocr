@@ -89,6 +89,13 @@
       .muted {
         color: #6b7280;
       }
+      .obj-img {
+        max-width: 200px;
+        max-height: 150px;
+        display: block;
+        border: 1px solid #e2e8f0;
+        border-radius: 4px;
+      }
     </style>
   </head>
   <body>
@@ -117,6 +124,7 @@
             <th>Тип</th>
             <th>Страница</th>
             <th>BBox</th>
+            <th>Сегмент</th>
             <th>Текст (фрагмент)</th>
           </tr>
         </thead>
@@ -188,16 +196,33 @@
             const typeCell = document.createElement("td");
             const pageCell = document.createElement("td");
             const bboxCell = document.createElement("td");
+            const segmentCell = document.createElement("td");
             const textCell = document.createElement("td");
 
             typeCell.innerHTML = `<span class="pill">${obj.type || "N/A"}</span>`;
             pageCell.textContent = (obj.page ?? "—").toString();
-            bboxCell.textContent = obj.bbox ? JSON.stringify(obj.bbox) : "—";
+            // BBox с точностью до одного знака после запятой
+            if (Array.isArray(obj.bbox) && obj.bbox.length >= 4) {
+              bboxCell.textContent = obj.bbox.map((x) => Number(x).toFixed(1)).join(", ");
+            } else {
+              bboxCell.textContent = obj.bbox ? JSON.stringify(obj.bbox) : "—";
+            }
+            // Сегмент изображения для типа image
+            if (obj.type === "image" && obj.image_base64) {
+              const img = document.createElement("img");
+              img.src = "data:image/png;base64," + obj.image_base64;
+              img.alt = "Сегмент";
+              img.className = "obj-img";
+              segmentCell.appendChild(img);
+            } else {
+              segmentCell.textContent = "—";
+            }
             textCell.textContent = (obj.text || "").slice(0, 200);
 
             row.appendChild(typeCell);
             row.appendChild(pageCell);
             row.appendChild(bboxCell);
+            row.appendChild(segmentCell);
             row.appendChild(textCell);
             objectsTableBody.appendChild(row);
           });
