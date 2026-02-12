@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from docling.datamodel.base_models import InputFormat
+from pdf2image import convert_from_path
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TesseractCliOcrOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.types.doc import PictureItem, TableItem
@@ -204,7 +205,45 @@ def convert_pdf(pdf_path: Path) -> Dict[str, Any]:
     doc = result.document
     text = doc.export_to_text()
     objects = _extract_objects(doc)
-    return {"text": text, "objects": objects}
+
+    # Рендер страниц PDF в изображения для визуализации bbox (как в qwenbbox)
+    pages_for_ui: List[Dict[str, Any]] = []
+    try:
+        page_images = convert_from_path(str(pdf_path), dpi=150)
+        for i, pil_img in enumerate(page_images):
+            page_num = i + 1
+            w_px, h_px = pil_img.size
+            w_pt = w_px * 72 / 150
+            h_pt = h_px * 72 / 150
+            buf = io.BytesIO()
+            pil_img.save(buf, format="PNG")
+            image_base64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            elements_on_page = []
+            for obj in objects:
+                if obj.get("page") != page_num:
+                    continue
+                bbox = obj.get("bbox")
+                if not bbox or len(bbox) < 4:
+                    elements_on_page.append({**obj, "bbox_norm": None})
+                    continue
+                left, top, right, bottom = [float(bbox[j]) for j in range(4)]
+                # PDF: origin bottom-left; переводим в нормализованные 0–1 (top-left origin для canvas)
+                x1 = left / w_pt
+                x2 = right / w_pt
+                y1 = 1.0 - (bottom / h_pt)
+                y2 = 1.0 - (top / h_pt)
+                elements_on_page.append({**obj, "bbox_norm": [round(x1, 4), round(y1, 4), round(x2, 4), round(y2, 4)]})
+            pages_for_ui.append({
+                "page": page_num,
+                "image_base64": image_base64,
+                "image_width_px": w_px,
+                "image_height_px": h_px,
+                "elements": elements_on_page,
+            })
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {"text": text, "objects": objects, "pages": pages_for_ui, "num_pages": len(pages_for_ui)}
 
 
 @app.get("/healthz")
